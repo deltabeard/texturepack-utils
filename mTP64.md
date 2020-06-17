@@ -1,12 +1,14 @@
 # mTP64
 
 This format aims to reduce the size and decoding time of texture packs when used
-with GLideNHQ. Improvements include:
+with GLideNHQ. Advantages of this format over HTC/HTS/RICE texture packs include:
 
-- Compressed textures in KTX format, supported natively by OpenGL and Vulkan.
+- Compressed textures in ETC1 format, supported natively by OpenGL and Vulkan.
   Most, if not all systems supported by GLideN may copy textures directly to
   VRAM without any processing.
 - Compressed textures means less RAM and file system space is required.
+- Textures may be further compressed with LZ4 for even smaller file size whilst
+  maintaining very fast decompression.
 - Textures are sorted by CRC checksum, which improves texture look-up speed.
 - No duplicate textures required for different formats.
 
