@@ -85,8 +85,8 @@ terminated if the length of pack_author is 32 characters.
 
 ### pack_size
 
-Size of this texture pack in multiples of eight bytes. The emulator guarantees
-not to read further than this offset.
+Size of this texture pack in bytes, divided by eight. The emulator guarantees
+not to read further than this offset. Where `texture pack size = pack_size * 8`.
 
 If `pack_size = 12058624` then the file size of the texture pack must be
 96468992 Bytes. The maximum file size supported by this format is therefore
@@ -104,9 +104,10 @@ pack minus the address of the first byte of the texture pack.
 
 ### dictionary_size
 
-The size of the dictionary which must be used when decompressing LZ4 textures.
-Set to 0 if no dictionary is used. The size stored here is in multiples of 1024.
-So a value of 4 equals 4096 bytes.
+The size of the dictionary in bytes, divided by 1024. This must be used when
+decompressing LZ4 textures. Set to 0 if no dictionary is used.
+
+So a value of 4 gives a dictionary size of 4096 bytes.
 
 ### dictionary_data
 
@@ -115,7 +116,7 @@ dictionary_size is not zero.
 
 ### unused
 
-These three bytes are reserved for future use and must be set to zero.
+These three bytes are reserved for future use and must not be used.
 
 ### for each n_mappings
 
@@ -128,8 +129,8 @@ A 32-bit CRC value.
 
 #### texture_offset
 
-The offset of the texture entry within the file in multiples of eight bytes,
-whereby a value of 1 is equal to 8 Bytes.
+The offset of the texture entry within the file in bytes, divided by eight.
+Whereby a value of 1 is equal to 8 bytes.
 
 ### for each n_textures
 
@@ -144,7 +145,10 @@ The format of the data.
 
 If the most significant bit (bit 7) is set, then the data is also compressed
 with LZ4. Decompress the data with LZ4 in order to obtain the data in the format
-described above.
+described above. Recommended settings for LZ4 include the use of high
+compression `--best` and favouring decompression speed `--favor-decSpeed`. If
+using a dictionary improves decompression speed or file size, then set the
+values of dictionary_size and dictionary_data.
 
 #### data_size
 
@@ -152,15 +156,15 @@ The size of texture data in bytes.
 
 #### tex_width
 
-The width of the texture.
+The width of the texture in pixels.
 
 #### tex_height
 
-The height of the texture.
+The height of the texture in pixels.
 
 #### data
 
-The texture data.
+The raw texture data.
 
 #### padding
 
