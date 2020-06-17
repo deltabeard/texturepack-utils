@@ -28,7 +28,9 @@ uint32_t pack_size
 uint32_t n_textures
 uint32_t n_mappings
 uint32_t first_texture_offset
-uint8_t unused[4]
+uint8_t dictionary_size
+uint8_t dictionary_data[dictionary_size]
+uint8_t unused[3]
 
 for each n_mappings
 	uint32_t crc
@@ -100,9 +102,20 @@ Offset where the first texture pack is located within the texture
 pack file. This value should be the address of the texture within the texture
 pack minus the address of the first byte of the texture pack.
 
+### dictionary_size
+
+The size of the dictionary which must be used when decompressing LZ4 textures.
+Set to 0 if no dictionary is used. The size stored here is in multiples of 1024.
+So a value of 4 equals 4096 bytes.
+
+### dictionary_data
+
+The dictionary data for LZ4 to use when decompressing. Only available when
+dictionary_size is not zero.
+
 ### unused
 
-These four bytes are reserved for future use.
+These three bytes are reserved for future use and must be set to zero.
 
 ### for each n_mappings
 
