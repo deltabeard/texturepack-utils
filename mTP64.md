@@ -34,7 +34,7 @@ uint32_t n_mappings
 uint32_t first_texture_offset
 uint8_t dictionary_size
 uint8_t dictionary_data[dictionary_size]
-uint8_t unused[3]
+uint8_t unused[4]
 
 for each n_mappings
 	uint32_t crc
@@ -120,7 +120,7 @@ dictionary_size is not zero.
 
 ### unused
 
-These three bytes are reserved for future use and must not be used.
+These four bytes are reserved for future use and must not be used.
 
 ### for each n_mappings
 
