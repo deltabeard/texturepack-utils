@@ -9,15 +9,25 @@
 #include <lz4frame.h>
 #include <lz4hc.h>
 
+#define XXH_INLINE_ALL
+#include "xxhash.h"
+
 #define CRC32_STR_LEN      8
 #define GL_ETC1_RGB8_OES   0x8D64
 #define GL_RGBA8_EXT       0x8058
 #define DATA_LZ4_COMPRESSED 0x80
 
+/**
+ * Used for rare system errors, such as ENOMEM, which make continuing difficult.
+ */
+void fatal_error(int line);
+#define ASSERT(x) do{if(!(x)){fatal_error(__LINE__);}}while(0)
+
 struct textures_s
 {
    uint32_t crc;
-   enum data_type_e {
+   enum data_type_e
+   {
       TYPE_ETC1 = 0,
       TYPE_RGBA8888
    } type;
@@ -39,15 +49,44 @@ struct texture_header_s
    uint16_t tex_height;
 } __attribute__((packed));
 
+struct mtp64_header_s
+{
+   uint8_t magic[10];
+   uint8_t version;
+   uint8_t tp_version[3];
+   char rom_target[20];
+   char pack_name[32];
+   char pack_author[32];
+   uint32_t pack_size;
+   uint32_t n_textures;
+   uint32_t n_mappings;
+   uint32_t first_texture_offset;
+   uint8_t dictionary_size;
+} __attribute__((packed));
+
+#define MTP64_HEADER_INIT {   \
+      .magic = { 0xAB, 'm', 'T', 'P', '@', 0xBB, 0x0D, 0x0A, 0x1A, 0x0A }, \
+      .version = 1, .tp_version = { 0, 1, 0 }, .rom_target = { 0 },        \
+      .pack_name = { 0 }, .pack_author = { 0 }, .pack_size = 0             \
+   }
+
+void fatal_error(int line)
+{
+   char buf[128];
+   snprintf(buf, sizeof(buf), "Fatal error on line %d", line);
+   perror(buf);
+   abort();
+}
+
 int compare_crc(const void *in1, const void *in2)
 {
    const struct textures_s *tex1 = in1;
    const struct textures_s *tex2 = in2;
    int64_t diff = tex1->crc - tex2->crc;
 
-   if(diff < 0)
+   if (diff < 0)
       return -1;
-   else if(diff > 0)
+   else if (diff > 0)
       return 1;
 
    return 0;
@@ -59,9 +98,9 @@ int compare_size(const void *in1, const void *in2)
    const struct textures_s *tex2 = in2;
    int64_t diff = tex1->data_sz - tex2->data_sz;
 
-   if(diff < 0)
+   if (diff < 0)
       return -1;
-   else if(diff > 0)
+   else if (diff > 0)
       return 1;
 
    return 0;
@@ -75,83 +114,67 @@ struct textures_s *add_textures(char **filenames, uint_fast32_t *entries)
    size_t rgba8_tally = 0;
 
    *entries = 0;
-   textures = calloc(alloc_nmemb, sizeof(*textures));
-
-   if (textures == NULL)
-   {
-      fprintf(stderr, "allocation failure\n");
-      goto err;
-   }
+   textures = malloc(alloc_nmemb * sizeof(*textures));
+   ASSERT(textures != NULL);
 
    for (char **filename = filenames; *filename != NULL; filename++)
    {
       ktxTexture *tex;
       KTX_error_code ktx_res;
+      char *dot;
+      size_t len;
+      char crcstr[CRC32_STR_LEN + 1];
 
       /* Is the file name correct? */
+      dot = strrchr(*filename, '.');
+      if (dot == NULL)
       {
-         char *dot = strrchr(*filename, '.');
-         size_t len;
-         char crcstr[CRC32_STR_LEN + 1];
-
-         if (dot == NULL)
-         {
-            fprintf(stderr, "could not determine file extension\n");
-            goto err;
-         }
-
-         len = dot - *filename;
-
-         if (len < CRC32_STR_LEN)
-         {
-            fprintf(stderr, "filename %s not a valid 32-bit CRC hash\n",
-                    *filename);
-            goto err;
-         }
-
-         if (len > CRC32_STR_LEN)
-         {
-            static uint8_t once = 1;
-            if(once)
-            {
-               once = 0;
-               fprintf(stderr, "CRC file names longer than %d characters will "
-                  "be truncated\n", CRC32_STR_LEN);
-            }
-         }
-
-         textures[*entries].filename = *filename;
-
-         strncpy(crcstr, dot - CRC32_STR_LEN, CRC32_STR_LEN);
-         crcstr[CRC32_STR_LEN] = '\0';
-         textures[*entries].crc = strtol(crcstr, NULL, 16);
-
-         if (textures[*entries].crc == UINT32_MAX)
-         {
-            fprintf(stderr, "overflow in strtol\n");
-            goto err;
-         }
-      }
-
-      uint32_t glInternalformat = 0;
-      FILE *f = fopen(*filename, "rb");
-      fseek(f, 28, SEEK_SET);
-      fread(&glInternalformat, sizeof(glInternalformat), 1, f);
-      fclose(f);
-
-      /* Can we open it? */
-      ktx_res = ktxTexture_CreateFromNamedFile(*filename,
-                                 KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &tex);
-
-      if (ktx_res != KTX_SUCCESS)
-      {
-         fprintf(stderr, "libktx returned error %d when opening file %s\n",
-                 ktx_res, *filename);
+         fprintf(stderr, "could not determine file extension\n");
          goto err;
       }
 
-      switch(glInternalformat)
+      /* Get the last 8 characters of the filename. */
+      len = dot - *filename;
+
+      if (len < CRC32_STR_LEN)
       {
+         fprintf(stderr, "filename %s not a valid 32-bit CRC hash\n",
+                 *filename);
+         goto err;
+      }
+
+      if (len > CRC32_STR_LEN)
+      {
+         static uint8_t once = 1;
+
+         if (once)
+         {
+            once = 0;
+            fprintf(stderr, "CRC file names longer than %d characters will "
+                    "be truncated\n", CRC32_STR_LEN);
+         }
+      }
+
+      textures[*entries].filename = *filename;
+
+      strncpy(crcstr, dot - CRC32_STR_LEN, CRC32_STR_LEN);
+      crcstr[CRC32_STR_LEN] = '\0';
+
+      textures[*entries].crc = strtol(crcstr, NULL, 16);
+      ASSERT(textures[*entries].crc != UINT32_MAX);
+
+      /* We have to obtain the format of the texture like this because libktx
+       * does not seem to expose access to it. */
+      {
+         uint32_t glInternalformat;
+         FILE *f = fopen(*filename, "rb");
+         ASSERT(f != NULL);
+         fseek(f, 28, SEEK_SET);
+         fread(&glInternalformat, sizeof(glInternalformat), 1, f);
+         fclose(f);
+
+         switch (glInternalformat)
+         {
          case GL_ETC1_RGB8_OES:
             textures[*entries].type = TYPE_ETC1;
             etc1_tally++;
@@ -163,16 +186,30 @@ struct textures_s *add_textures(char **filenames, uint_fast32_t *entries)
             break;
 
          default:
-            fprintf(stderr, "unsupported texture format %x in %s\n",
-                    glInternalformat, *filename);
-            ktxTexture_Destroy(tex);
+            fprintf(stderr, "Unsupported texture format %x in %s\n"
+                  "Format must be either %x or %x\n",
+                    glInternalformat, *filename,
+                    GL_ETC1_RGB8_OES, GL_RGBA8_EXT);
             goto err;
+         }
+      }
+
+      /* Can we open it? */
+      ktx_res = ktxTexture_CreateFromNamedFile(*filename,
+                KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT, &tex);
+
+      if (ktx_res != KTX_SUCCESS)
+      {
+         fprintf(stderr, "libktx returned error %d when opening file %s\n",
+                 ktx_res, *filename);
+         goto err;
       }
 
       textures[*entries].data_sz = ktxTexture_GetDataSizeUncompressed(tex);
+
       if (textures[*entries].data_sz > UINT32_MAX)
       {
-         fprintf(stderr, "input file %s larger than 4 GiB\n", *filename);
+         fprintf(stderr, "Input file %s is larger than 4 GiB\n", *filename);
          ktxTexture_Destroy(tex);
          goto err;
       }
@@ -184,21 +221,12 @@ struct textures_s *add_textures(char **filenames, uint_fast32_t *entries)
       {
          alloc_nmemb <<= 2;
          textures = realloc(textures, alloc_nmemb * sizeof(*textures));
-
-         if (textures == NULL)
-         {
-            fprintf(stderr, "unable to realloc\n");
-            goto err;
-         }
+         ASSERT(textures);
       }
    }
 
    textures = realloc(textures, *entries * sizeof(*textures));
-   if(textures == NULL)
-   {
-      fprintf(stderr, "unable to realloc to number of entries\n");
-      goto err;
-   }
+   ASSERT(textures != NULL);
 
    fprintf(stdout, "Successfully processed %lu ETC1 and %lu RGBA8888 textures\n",
            etc1_tally, rgba8_tally);
@@ -246,7 +274,8 @@ int main(int argc, char *argv[])
       return EXIT_FAILURE;
    }
 
-   for (unsigned i = 1; i < 4 && i < argc; i++)
+   /* Process arguments. */
+   for (int i = 1; i < 4 && i < argc; i++)
    {
       const char *const args[] = { "--dump-textures", "--dictionary" };
 
@@ -263,12 +292,6 @@ int main(int argc, char *argv[])
    {
       fprintf(stderr, "You may not dump textures and use a dictionary for LZ4 compression, \n"
               "as no compression takes place when dumping textures.\n");
-      return EXIT_FAILURE;
-   }
-
-   if (options.use_dictionary)
-   {
-      puts("Currently unsupported.");
       return EXIT_FAILURE;
    }
 
@@ -291,182 +314,189 @@ int main(int argc, char *argv[])
    }
 
    textures = add_textures(filenames, &entries);
-   if(textures == NULL)
+   if (textures == NULL)
    {
-      fprintf(stderr, "A failure occured.\n");
+      fprintf(stderr, "Unable to compile list of textures.\n");
       return EXIT_FAILURE;
    }
 
+   if (options.dump_textures)
+   {
+      for (size_t i = 0; i < entries; i++)
+      {
+         FILE *f_dmp;
+         ktxTexture *ktex;
+         KTX_error_code kret;
+         uint8_t *tex;
+         char dump_name[8 + 1 + 4 + 1]; /* Example: "0A0B0C0D.ETC1" */
+
+         kret = ktxTexture_CreateFromNamedFile(textures[i].filename,
+                                               KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT,
+                                               &ktex);
+
+         if (kret != KTX_SUCCESS)
+         {
+            fprintf(stdout, "%d: libktx was unable to create file %s: %s\n",
+                    __LINE__, textures[i].filename, ktxErrorString(kret));
+            abort();
+         }
+
+         tex = ktxTexture_GetData(ktex);
+         snprintf(dump_name, sizeof(dump_name), "%08X.%s",
+                  textures[i].crc,
+                  textures[i].type == TYPE_ETC1 ? "ETC1" : "RGB8");
+
+         f_dmp = fopen(dump_name, "wb");
+         ASSERT(f_dmp != NULL);
+
+         fwrite(tex, 1, textures[i].data_sz, f_dmp);
+         fclose(f_dmp);
+         ktxTexture_Destroy(ktex);
+      }
+
+      fprintf(stdout, "%lu textures dumped.\n", entries);
+      free(textures);
+      return EXIT_SUCCESS;
+   }
+
+#if 0
    struct textures_s *crc_sorted = textures;
+
+   /* Sort texture entries by size, smallest to largest size. */
+   /* FIXME: do this after compression. */
    struct textures_s *size_sorted = malloc(entries * sizeof(*textures));
-   if(size_sorted == NULL)
-   {
-      fprintf(stderr, "alloc error\n");
-      return EXIT_FAILURE;
-   }
-
+   ASSERT(size_sorted != NULL);
    memcpy(size_sorted, crc_sorted, entries * sizeof(*textures));
-   /* Sort texture data from smallest size to largest. */
    qsort(size_sorted, entries, sizeof(*textures), compare_size);
+#endif
 
-   /* Write mTP64 file. */
-   const uint8_t magic[10] = {
-      0xAB, 'm', 'T', 'P', '@', 0xBB, 0x0D, 0x0A, 0x1A, 0x0A
-   };
-   const uint8_t version = 1;
-   const uint8_t tp_version[3] = { 0, 0, 1 };
-   const char rom_target[20] = "STUB";
-   const char pack_name[32] = "STUB";
-   uint32_t pack_size = 0;
-   const uint32_t n_textures = entries;
-   const uint32_t n_mappings = entries;
-   uint32_t first_texture_offset = 0;
-   uint8_t dictionary_size = 0; /* Dictionary size divided by 1024. */
    size_t fdic_sz = 0; /* Actual dictionary size. */
    uint8_t *dictionary = NULL;
-   const uint8_t unused[3] = { 0 };
-   FILE *f_out;
+   LZ4F_CDict *cdict = NULL;
+   struct mtp64_header_s mtp64_hdr = MTP64_HEADER_INIT;
+   const size_t map_sz = entries * sizeof(struct map_s);
+   struct map_s *map = malloc(map_sz);
 
-   if(options.use_dictionary)
+   for (size_t i = 0; i < entries; i++)
+      map[i].crc = textures[i].crc;
+
+   mtp64_hdr.n_mappings = entries;
+
+   if (options.use_dictionary)
    {
       FILE *fdic = fopen(options.dictionary_file, "rb");
+      ASSERT(fdic != NULL);
 
       fseek(fdic, 0, SEEK_END);
       fdic_sz = ftell(fdic);
-      if(fdic_sz % 1024 != 0)
+
+      if (fdic_sz % 1024 != 0)
       {
          fprintf(stderr, "Dictionary file size is not a multiple of 1024\n");
-         free(crc_sorted);
-         free(size_sorted);
+         free(textures);
+         free(map);
          fclose(fdic);
          return EXIT_FAILURE;
       }
 
-      dictionary_size = fdic_sz / 1024;
+      mtp64_hdr.dictionary_size = fdic_sz / 1024;
       dictionary = malloc(fdic_sz);
-      assert(dictionary != NULL);
+      ASSERT(dictionary != NULL);
+
       rewind(fdic);
       fread(dictionary, 1, fdic_sz, fdic);
       fclose(fdic);
+
+      cdict = LZ4F_createCDict(dictionary, fdic_sz);
+      puts("Dictionary was initialised and will be embedded within the texture "
+           "pack");
    }
 
-   if (options.dump_textures == 0)
-   {
-      f_out = fopen(options.mtp64_out, "wb");
+   FILE *f_out = fopen(options.mtp64_out, "wb");
+   ASSERT(f_out);
 
-      if (f_out == NULL)
-      {
-         fprintf(stderr, "Unable to open output file\n");
-         free(size_sorted);
-         free(crc_sorted);
-         return EXIT_FAILURE;
-      }
+   FILE *f_dupes = NULL;
+   ASSERT(f_out);
 
 #define fw(p) fwrite(p, 1, sizeof(p), f_out)
 #define fwv(v) fwrite(&v, 1, sizeof(v), f_out)
-      fw(magic);
-      fwv(version);
-      fw(tp_version);
-      fw(rom_target);
-      fw(pack_name);
-      fwv(pack_size);
-      fwv(n_textures);
-      fwv(n_mappings);
-      fwv(first_texture_offset);
-      fwv(dictionary_size);
-      if(dictionary_size != 0)
-         fwrite(dictionary, 1, fdic_sz, f_out);
 
+   fwv(mtp64_hdr);
+   fwrite(dictionary, 1, fdic_sz, f_out);
+   {
+      uint8_t unused[4] = { 0, 0, 0, 0 };
       fw(unused);
    }
 
-   for(size_t i = 0; i < entries; i++)
+   fwrite(map, 1, map_sz, f_out);
+   mtp64_hdr.first_texture_offset = ftell(f_out);
+
+   puts("Writing texture data");
+
+   struct tex_hash_list_s {
+      uint64_t hash;
+      char *filename;
+   };
+   struct tex_hash_list_s *tex_hash_list =
+         malloc(entries * sizeof(struct tex_hash_list_s));
+   mtp64_hdr.n_textures = 0;
+
+   for(struct textures_s *tex = textures; tex < textures + entries; tex++)
    {
-      uint32_t offset = 0;
-
-      if(options.dump_textures == 0)
-         fwv(crc_sorted[i].crc);
-
-      for (size_t j = 0; j < entries; j++)
-      {
-         if (crc_sorted[i].crc == size_sorted[j].crc)
-         {
-            uint8_t *tex;
-            FILE *f_dmp;
-            char dump_name[8 + 1 + 4 + 1] = "0A0B0C0D.ETC1";
-            ktxTexture *ktex;
-            KTX_error_code kret;
-
-            if (options.dump_textures == 0)
-            {
-               fwv(offset);
-               goto found;
-            }
-
-            kret = ktxTexture_CreateFromNamedFile(crc_sorted[i].filename,
-                                                  KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT,
-                                                  &ktex);
-            assert(kret == KTX_SUCCESS);
-            tex = ktxTexture_GetData(ktex);
-
-            snprintf(dump_name, sizeof(dump_name), "%08X.%s",
-                     crc_sorted[i].crc,
-                     crc_sorted[i].type == TYPE_ETC1 ? "ETC1" : "RGB8");
-            f_dmp = fopen(dump_name, "wb");
-            fwrite(tex, 1, crc_sorted[i].data_sz, f_dmp);
-            fclose(f_dmp);
-
-            ktxTexture_Destroy(ktex);
-
-            goto found;
-         }
-
-         offset += size_sorted[j].data_sz;
-      }
-
-      fprintf(stderr, "key did not exist\n");
-      abort();
-
-found:
-      continue;
-   }
-
-   fprintf(stdout, "Writing texture data\n");
-   fflush(stdout);
-
-   /* Prepare LZ4 compression dictionary. */
-   LZ4F_CDict *cdict = NULL;
-   if(dictionary_size != 0)
-      cdict = LZ4F_createCDict(dictionary, fdic_sz);
-
-   for (size_t i = 0; i < entries; i++)
-   {
-      uint8_t *tex;
+      uint8_t data_format = tex->type;
+      size_t data_size;
+      uint64_t data_hash;
+      uint8_t *data_tex;
       ktxTexture *ktex;
       KTX_error_code kret;
 
-      kret = ktxTexture_CreateFromNamedFile(size_sorted[i].filename,
+      kret = ktxTexture_CreateFromNamedFile(tex->filename,
                                             KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT,
                                             &ktex);
-      assert(kret == KTX_SUCCESS);
-      tex = ktxTexture_GetData(ktex);
 
-      if (options.dump_textures)
+      if (kret != KTX_SUCCESS)
       {
-         FILE *f_dmp;
-         char dump_name[8 + 1 + 4 + 1] = "0A0B0C0D.ETC1";
-         snprintf(dump_name, sizeof(dump_name), "%08X.%s",
-                  size_sorted[i].crc,
-                  size_sorted[i].type == TYPE_ETC1 ? "ETC1" : "RGB8");
-
-         f_dmp = fopen(dump_name, "wb");
-         fwrite(tex, 1, size_sorted[i].data_sz, f_dmp);
-         fclose(f_dmp);
-         ktxTexture_Destroy(ktex);
-         continue;
+         fprintf(stdout, "Error at %d: libktx was unable to open file %s: %s\n",
+                 __LINE__, tex->filename, ktxErrorString(kret));
+         abort();
       }
 
-      assert(size_sorted[i].data_sz == ktxTexture_GetDataSize(ktex));
+      data_size = ktxTexture_GetDataSize(ktex);
+      data_tex = ktxTexture_GetData(ktex);
+
+      data_hash = XXH64(data_tex, data_size, 0xDEADBEEF);
+
+      /* Check for duplicates. */
+      for (size_t d = 0; d < mtp64_hdr.n_textures; d++)
+      {
+         if (tex_hash_list[d].hash != data_hash)
+            continue;
+
+         if (f_dupes == NULL)
+         {
+            f_dupes = fopen("duplicates.txt", "wb");
+            ASSERT(f_dupes != NULL);
+         }
+
+         fprintf(f_dupes, "\"%s\" \"%s\"\n",
+                 tex_hash_list[d].filename, tex->filename);
+         goto duplicate;
+      }
+
+      tex_hash_list[mtp64_hdr.n_textures].hash = data_hash;
+      tex_hash_list[mtp64_hdr.n_textures].filename = tex->filename;
+
+      for(size_t i = 0; i < mtp64_hdr.n_textures; i++)
+      {
+         if(map[i].crc == tex->crc)
+         {
+            assert(ftell(f_out) % 8 == 0);
+            map[i].offset = ftell(f_out) / 8;
+            break;
+         }
+      }
+
+      mtp64_hdr.n_textures++;
 
       /* Compress texture with LZ4. */
       {
@@ -476,69 +506,86 @@ found:
          size_t lz4sz_max;
          size_t lz4sz;
          char *lz4tex;
-         struct texture_header_s hdr;
+         struct texture_header_s tex_hdr;
 
          lz4pref.compressionLevel = LZ4HC_CLEVEL_DEFAULT;
 
-         lz4sz_max = LZ4F_compressFrameBound(size_sorted[i].data_sz, &lz4pref);
+         lz4sz_max = LZ4F_compressFrameBound(data_size, &lz4pref);
          lz4tex = malloc(lz4sz_max);
+         ASSERT(lz4tex != NULL);
 
          lz4err = LZ4F_createCompressionContext(&cctxPtr, LZ4F_VERSION);
-         if(LZ4F_isError(lz4err))
+
+         if (LZ4F_isError(lz4err))
          {
-            fprintf(stderr, "error compressing with LZ4: %s\n",
+            fprintf(stderr, "Error compressing texture with LZ4: %s\n",
                     LZ4F_getErrorName(lz4err));
             abort();
          }
 
-         lz4sz = LZ4F_compressFrame_usingCDict(cctxPtr, lz4tex, lz4sz_max, tex,
-                                       size_sorted[i].data_sz, cdict, &lz4pref);
+         lz4sz = LZ4F_compressFrame_usingCDict(cctxPtr, lz4tex, lz4sz_max,
+                                               data_tex, data_size, cdict,
+                                               &lz4pref);
 
-         hdr.data_format = size_sorted[i].type | DATA_LZ4_COMPRESSED;
-         hdr.data_size = lz4sz;
-         hdr.tex_height = ktex->baseHeight;
-         hdr.tex_height = ktex->baseWidth;
-         fwv(hdr);
-
+         tex_hdr.data_format = data_format;
+         tex_hdr.data_size = lz4sz;
+         tex_hdr.tex_width = ktex->baseWidth;
+         tex_hdr.tex_height = ktex->baseHeight;
+         fwv(tex_hdr);
          fwrite(lz4tex, 1, lz4sz, f_out);
 
-         /* Add padding for 8-byte alignment. */
-#define ALIGNMENT 8
-         uint8_t mod = (hdr.data_size + sizeof(hdr)) % ALIGNMENT;
-         const uint8_t padding[ALIGNMENT] = { 0 };
-         if(mod != 0)
-            fwrite(padding, 1, ALIGNMENT - mod, f_out);
-#undef ALIGNMENT
+         /* Add any required padding. */
+         {
+            const unsigned required_padding = 8;
+            const uint8_t padding[7] = { 0 };
+            size_t tex_entry_sz = sizeof(tex_hdr) + lz4sz;
+            uint8_t add_pad = tex_entry_sz % required_padding;
 
-         free(lz4tex);
+            if(add_pad != 0)
+            {
+               add_pad = required_padding - add_pad;
+               fwrite(padding, 1, add_pad, f_out);
+            }
+         }
       }
 
+duplicate:
       ktxTexture_Destroy(ktex);
+      continue;
    }
 
-   if (options.dump_textures == 0)
-      fclose(f_out);
+   /* Rewrite header and hash map information. */
+   fseek(f_out, 0, SEEK_SET);
+   fwv(mtp64_hdr);
+   fwrite(dictionary, 1, fdic_sz, f_out);
+   {
+      uint8_t unused[4] = { 0, 0, 0, 0 };
+      fw(unused);
+   }
+   fwrite(map, 1, map_sz, f_out);
+   fclose(f_out);
+
+   if(f_dupes != NULL)
+   {
+      puts("duplicates.txt file created");
+      fclose(f_dupes);
+   }
+
+   fprintf(stdout, "Wrote %u CRC entries and %u textures (%u duplicates)\n",
+           mtp64_hdr.n_mappings, mtp64_hdr.n_textures,
+           (mtp64_hdr.n_mappings - mtp64_hdr.n_textures));
 
 #undef fw
 #undef fwv
 
-   // Allocate hashmap given the number of inputs.
-   // Read each file, storing CRC and texture data. Check for duplicates.
-   // Create dictionary on all texture data
-   // Compress each texture with LZ4
-   // Sort textures from smallest to largest in size
-   // Sort CRC map
-   // Resolve texture data pointers
-   // Save output texture pack
-   // Output compression ratio, etc.
+   free(textures);
+   free(tex_hash_list);
+   free(map);
 
-   free(size_sorted);
-   free(crc_sorted);
-
-   if(dictionary != NULL)
+   if (dictionary != NULL)
    {
-      free(dictionary);
       LZ4F_freeCDict(cdict);
+      free(dictionary);
    }
 
    return EXIT_SUCCESS;
