@@ -226,7 +226,7 @@ struct textures_s *add_textures(char **filenames, uint_fast32_t *entries)
 
       if(*entries % 128 == 0)
       {
-         fprintf(stdout, ".");
+         putc('.', stdout);
          fflush(stdout);
       }
    }
@@ -257,8 +257,7 @@ int main(int argc, char *argv[])
    uint_fast32_t entries;
    struct
    {
-      unsigned char dump_textures : 1;
-      unsigned char use_dictionary : 1;
+      unsigned char dump_textures;
       char *mtp64_out;
       char *dictionary_file;
    } options = { 0 };
@@ -282,42 +281,70 @@ int main(int argc, char *argv[])
    }
 
    /* Process arguments. */
-   for (int i = 1; i < 4 && i < argc; i++)
+   for (char **arg = (argv + 1); ; arg++)
    {
-      const char *const args[] = { "--dump-textures", "--dictionary" };
+      struct optlist_s {
+            const char *name;
+            const enum { NONE, REQUIRED } param;
+            union {
+               void **valp;
+               unsigned char *valc;
+            };
+      };
+      struct optlist_s opts[] = {
+         { "out",       REQUIRED, { .valp = (void**)&options.mtp64_out } },
+         { "dump",      NONE,     { .valc = &options.dump_textures     } },
+         { "dictionary",REQUIRED, { .valp = (void**)&options.dictionary_file } }
+      };
 
-      if (strncmp(args[0], argv[i], strlen(args[0])) == 0)
-         options.dump_textures = 1;
-      else if (strncmp(args[1], argv[i], strlen(args[1])) == 0)
+      /* Is this a command or a filename? */
+      if(**arg != '-')
       {
-         options.use_dictionary = 1;
-         options.dictionary_file = argv[++i];
+         filenames = arg;
+         break;
+      }
+
+      for (unsigned i = 0; i < sizeof(opts)/sizeof(*opts); i++)
+      {
+         if(strcmp(opts[i].name, (*arg) + 1) == 0)
+         {
+            if(opts[i].param == REQUIRED)
+            {
+               *opts[i].valp = *(++arg);
+            }
+            else
+            {
+               *opts[i].valc = 1;
+            }
+         }
       }
    }
 
-   if (options.dump_textures && options.use_dictionary)
+   if(options.mtp64_out == NULL && options.dump_textures == 0)
+   {
+      fprintf(stderr, "No output file was specified.\n");
+      return EXIT_FAILURE;
+   }
+
+   if(filenames == NULL)
+   {
+      fprintf(stderr, "No file names were specified.\n");
+      return EXIT_FAILURE;
+   }
+
+   if (options.dump_textures && options.dictionary_file != NULL)
    {
       fprintf(stderr, "You may not dump textures and use a dictionary for LZ4 compression, \n"
               "as no compression takes place when dumping textures.\n");
       return EXIT_FAILURE;
    }
 
+   if (options.dump_textures && options.mtp64_out != NULL)
    {
-      char **first_file = argv + 1;
-
-      if (options.dump_textures)
-         first_file++;
-
-      if (options.use_dictionary)
-         first_file += 2;
-
-      filenames = first_file;
-   }
-
-   if (options.dump_textures == 0)
-   {
-      options.mtp64_out = *filenames;
-      filenames++;
+      fprintf(stderr, "When dump is enabled, textures are dumped in the "
+         "current folder and no mTP64 texture pack is created. Therefore, "
+         "using dump and out arguments is not allowed.\n");
+      return EXIT_FAILURE;
    }
 
    textures = add_textures(filenames, &entries);
@@ -389,7 +416,7 @@ int main(int argc, char *argv[])
 
    mtp64_hdr.n_mappings = entries;
 
-   if (options.use_dictionary)
+   if (options.dictionary_file != NULL)
    {
       FILE *fdic = fopen(options.dictionary_file, "rb");
       ASSERT(fdic != NULL);
@@ -561,9 +588,9 @@ int main(int argc, char *argv[])
 
 duplicate:
       ktxTexture_Destroy(ktex);
-      if((intptr_t)tex % 128 == 0)
+      if((intptr_t)tex % (128 * sizeof(intptr_t)) == 0)
       {
-         fprintf(stdout, ".");
+         putc('.', stdout);
          fflush(stdout);
       }
 
@@ -589,9 +616,9 @@ duplicate:
       fclose(f_dupes);
    }
 
-   fprintf(stdout, "Wrote %u CRC entries and %u textures (%u duplicates)\n",
+   fprintf(stdout, "Wrote %u CRC entries and %u textures (%u duplicates) to %s\n",
            mtp64_hdr.n_mappings, mtp64_hdr.n_textures,
-           (mtp64_hdr.n_mappings - mtp64_hdr.n_textures));
+           (mtp64_hdr.n_mappings - mtp64_hdr.n_textures), options.mtp64_out);
 
 #undef fw
 #undef fwv
