@@ -223,11 +223,18 @@ struct textures_s *add_textures(char **filenames, uint_fast32_t *entries)
          textures = realloc(textures, alloc_nmemb * sizeof(*textures));
          ASSERT(textures);
       }
+
+      if(*entries % 128 == 0)
+      {
+         fprintf(stdout, ".");
+         fflush(stdout);
+      }
    }
 
    textures = realloc(textures, *entries * sizeof(*textures));
    ASSERT(textures != NULL);
 
+   putc('\n', stdout);
    fprintf(stdout, "Successfully processed %lu ETC1 and %lu RGBA8888 textures\n",
            etc1_tally, rgba8_tally);
 
@@ -422,7 +429,9 @@ int main(int argc, char *argv[])
 #define fwv(v) fwrite(&v, 1, sizeof(v), f_out)
 
    fwv(mtp64_hdr);
-   fwrite(dictionary, 1, fdic_sz, f_out);
+   if(mtp64_hdr.dictionary_size != 0)
+      fwrite(dictionary, 1, fdic_sz, f_out);
+
    {
       uint8_t unused[4] = { 0, 0, 0, 0 };
       fw(unused);
@@ -490,8 +499,9 @@ int main(int argc, char *argv[])
       {
          if(map[i].crc == tex->crc)
          {
-            assert(ftell(f_out) % 8 == 0);
-            map[i].offset = ftell(f_out) / 8;
+            long offset = ftell(f_out);
+            assert(offset % 8 == 0);
+            map[i].offset = (unsigned long)offset / 8;
             break;
          }
       }
@@ -538,8 +548,8 @@ int main(int argc, char *argv[])
          {
             const unsigned required_padding = 8;
             const uint8_t padding[7] = { 0 };
-            size_t tex_entry_sz = sizeof(tex_hdr) + lz4sz;
-            uint8_t add_pad = tex_entry_sz % required_padding;
+            long offset = ftell(f_out);
+            uint8_t add_pad = offset % required_padding;
 
             if(add_pad != 0)
             {
@@ -551,8 +561,16 @@ int main(int argc, char *argv[])
 
 duplicate:
       ktxTexture_Destroy(ktex);
+      if((intptr_t)tex % 128 == 0)
+      {
+         fprintf(stdout, ".");
+         fflush(stdout);
+      }
+
       continue;
    }
+
+   putc('\n', stdout);
 
    /* Rewrite header and hash map information. */
    fseek(f_out, 0, SEEK_SET);
