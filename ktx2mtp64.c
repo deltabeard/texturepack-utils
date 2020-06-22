@@ -411,6 +411,8 @@ int main(int argc, char *argv[])
    const size_t map_sz = entries * sizeof(struct map_s);
    struct map_s *map = malloc(map_sz);
 
+   ASSERT(map != NULL);
+
    for (size_t i = 0; i < entries; i++)
       map[i].crc = textures[i].crc;
 
@@ -447,8 +449,6 @@ int main(int argc, char *argv[])
    }
 
    FILE *f_out = fopen(options.mtp64_out, "wb");
-   ASSERT(f_out);
-
    FILE *f_dupes = NULL;
    ASSERT(f_out);
 
@@ -570,6 +570,9 @@ int main(int argc, char *argv[])
          tex_hdr.tex_height = ktex->baseHeight;
          fwv(tex_hdr);
          fwrite(lz4tex, 1, lz4sz, f_out);
+
+         free(lz4tex);
+         LZ4F_freeCompressionContext(cctxPtr);
 
          /* Add any required padding. */
          {
