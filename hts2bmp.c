@@ -34,7 +34,8 @@ struct mapping_s
    uint64_t crc;
 };
 
-void write_bmp(const uint8_t *bmp, size_t bmp_sz, uint64_t crc, int w, int h)
+void write_bmp(const uint8_t *bmp, size_t bmp_sz, uint64_t crc, size_t w,
+               size_t h)
 {
    static unsigned char argb_bmp[] =
    {
@@ -163,7 +164,7 @@ int dump_hts(const char *hts_filename)
       gzread(gzfp, &fmt, 4);
       gzseek(gzfp, fmt_len, SEEK_CUR);
       gzread(gzfp, &tex_sz, 4);
-      dst_len = h * w * sizeof(uint32_t);
+      dst_len = (size_t)h * (size_t)w * sizeof(uint32_t);
 
       if (dst_len > texture_buf_sz)
       {
@@ -285,7 +286,7 @@ int dump_htc(const char *htc_filename)
       gzseek(gzfp, fmt_len, SEEK_CUR);
       gzread(gzfp, &tex_sz, 4);
 
-      dst_len = w * h * sizeof(uint32_t);
+      dst_len = (size_t)w * (size_t)h * sizeof(uint32_t);
 
       while (dst_len > texture_buf_sz)
       {
@@ -298,7 +299,7 @@ int dump_htc(const char *htc_filename)
 
       gzread(gzfp, texture_buf, tex_sz);
 
-      if ((size_t)tex_sz > w * h * sizeof(uint32_t))
+      if ((size_t)tex_sz > (size_t)w * (size_t)h * sizeof(uint32_t))
       {
          fprintf(stderr, "Texture format at %lu not supported.\n",
                  gztell(gzfp));
