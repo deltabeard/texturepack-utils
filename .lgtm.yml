@@ -1,0 +1,8 @@
+extraction:
+  cpp:
+    configure:
+      command:
+        - tar -xf ./external/linux_amd64.tar.gz -C ${LGTM_WORKSPACE}
+    index:
+      build_command:
+        - make CFLAGS="-Og -g3 -L${LGTM_WORKSPACE}/lib -I${LGTM_WORKSPACE}/include" LZ4LIB=${LGTM_WORKSPACE}/lib/liblz4.a
