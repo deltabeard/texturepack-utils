@@ -5,4 +5,4 @@ ht2bmp: LDLIBS := -lz
 ktx2raw: LDLIBS := -lktx
 ktx2mtp64: LDLIBS := -lktx $(LZ4LIB)
 
-all: ht2bmp ktx2raw ktx2mtp64
+all: hts2bmp ktx2raw ktx2mtp64

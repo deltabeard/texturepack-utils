@@ -82,15 +82,8 @@ int compare_offset(const void *in1, const void *in2)
 {
    const struct mapping_s *m1 = in1;
    const struct mapping_s *m2 = in2;
-   int64_t rem;
-   bool overflow = __builtin_sub_overflow(m1->offset, m2->offset, &rem);
 
-   if (overflow || rem < 0)
-      return -1;
-   else if (rem > 0)
-      return 1;
-
-   return 0;
+   return m1->offset - m2->offset;
 }
 
 int dump_hts(const char *hts_filename)
@@ -138,7 +131,7 @@ int dump_hts(const char *hts_filename)
       if (map_nmemb >= map_sz)
       {
          map_sz <<= 1;
-         map = reallocarray(map, map_sz, sizeof(*map));
+         map = realloc(map, map_sz * sizeof(*map));
 
          if (map == NULL)
             goto allocerr;
